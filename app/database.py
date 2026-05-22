@@ -123,7 +123,8 @@ class JsonStore:
                 )
                 for item in payload.get("event_logs", [])
             ]
-            max_event_id = max([event.id for event in self._event_logs], default=0)
+            max_event = max(self._event_logs, key=lambda event: event.id, default=None)
+            max_event_id = max_event.id if max_event else 0
             self._next_event_id = max_event_id + 1
 
     def _serialize(self) -> dict[str, Any]:

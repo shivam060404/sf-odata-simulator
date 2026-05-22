@@ -398,8 +398,11 @@ def admin_seed(store: JsonStore = Depends(get_store)):
 
 @app.post("/admin/simulate/tick", dependencies=[Depends(require_admin_token)])
 def admin_tick(store: JsonStore = Depends(get_store)):
-    pending = [item for item in store.list_entities(OnboardingTask) if item.status != "COMPLETED"]
-    task = min(pending, key=lambda item: item.id, default=None)
+    task = min(
+        (item for item in store.list_entities(OnboardingTask) if item.status != "COMPLETED"),
+        key=lambda item: item.id,
+        default=None,
+    )
     if not task:
         return {"advanced": False, "reason": "no pending tasks"}
     task.status = "COMPLETED"
