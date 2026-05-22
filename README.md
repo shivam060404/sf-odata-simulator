@@ -35,7 +35,7 @@ uvicorn app.main:app --reload
 - `DATABASE_URL` (e.g. `postgresql+psycopg://postgres:postgres@localhost:5432/sf_odata_sim`)
 - `API_TOKEN` (bearer token for admin endpoints)
 
-## Planned API
+## API
 Base: `/odata/v2`
 - `/Candidate`
 - `/OnboardingProcess`
@@ -47,3 +47,27 @@ Base: `/odata/v2`
 Admin:
 - `POST /admin/seed`
 - `POST /admin/simulate/tick`
+
+## OData-flavored query support
+- `$top`, `$skip`
+- `$orderby=lastModifiedAt asc|desc`
+- minimal `$filter`:
+  - `eq`
+  - `gt` (only on `lastModifiedAt`)
+  - `and`
+
+## Response shapes
+- Collection:
+```json
+{
+  "value": [],
+  "count": 0,
+  "next": null
+}
+```
+- Singleton:
+```json
+{
+  "value": {}
+}
+```
