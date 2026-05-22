@@ -4,7 +4,6 @@ from datetime import datetime
 from typing import Any
 
 from fastapi import HTTPException
-from sqlalchemy import and_
 
 
 def parse_iso8601(value: str) -> datetime:
@@ -23,27 +22,42 @@ def parse_orderby(orderby: str | None):
     return pieces[1]
 
 
-def apply_filter(query, filter_str: str | None, field_map: dict[str, Any]):
+def apply_filter(rows: list[Any], filter_str: str | None, field_map: dict[str, str]):
     if not filter_str:
-        return query
+        return rows
 
-    clauses = []
+    clauses: list[tuple[str, str, Any]] = []
     for part in [p.strip() for p in filter_str.split(" and ")]:
         if " eq " in part:
             field, raw = part.split(" eq ", 1)
             if field not in field_map:
                 raise HTTPException(status_code=400, detail=f"Unsupported filter field: {field}")
             value = raw.strip().strip("'")
-            clauses.append(field_map[field] == value)
+            clauses.append(("eq", field_map[field], value))
         elif " gt " in part:
             field, raw = part.split(" gt ", 1)
             if field != "lastModifiedAt":
                 raise HTTPException(status_code=400, detail="gt is only supported for lastModifiedAt")
-            clauses.append(field_map[field] > parse_iso8601(raw.strip().strip("'")))
+            clauses.append(("gt", field_map[field], parse_iso8601(raw.strip().strip("'"))))
         else:
             raise HTTPException(status_code=400, detail=f"Unsupported filter expression: {part}")
 
-    return query.where(and_(*clauses))
+    def matches(row: Any) -> bool:
+        for op, attr, value in clauses:
+            actual = getattr(row, attr)
+            if op == "eq":
+                if isinstance(actual, datetime):
+                    value_dt = parse_iso8601(value) if isinstance(value, str) else value
+                    if actual != value_dt:
+                        return False
+                elif actual != value:
+                    return False
+            elif op == "gt":
+                if actual <= value:
+                    return False
+        return True
+
+    return [row for row in rows if matches(row)]
 
 
 def to_collection_response(value: list[dict], count: int, next_url: str | None) -> dict:

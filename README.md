@@ -11,28 +11,21 @@ SuccessFactors (SF) **OData-flavored onboarding simulator** for prototyping poll
 
 ### 1) Requirements
 - Python 3.11+
-- Docker (for PostgreSQL)
 
-### 2) Start PostgreSQL
-```bash
-docker compose up -d db
-```
-
-### 3) Create venv + install deps
+### 2) Create venv + install deps
 ```bash
 python -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-### 4) Run migrations + start API
+### 3) Start API
 ```bash
-alembic upgrade head
 uvicorn app.main:app --reload
 ```
 
 ## Environment variables
-- `DATABASE_URL` (e.g. `postgresql+psycopg://postgres:postgres@localhost:5432/sf_odata_sim`)
+- `DATA_FILE` (path to JSON store, defaults to `data.json` in the working directory)
 - `API_TOKEN` (bearer token for admin endpoints)
 
 ## API
