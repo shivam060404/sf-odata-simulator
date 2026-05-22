@@ -28,6 +28,9 @@ uvicorn app.main:app --reload
 - `DATA_FILE` (path to JSON store, defaults to `data.json` in the working directory)
 - `API_TOKEN` (bearer token for admin endpoints)
 
+## Notes
+- The JSON-backed store is intended for single-process usage; run a single Uvicorn worker when persisting to `DATA_FILE`.
+
 ## API
 Base: `/odata/v2`
 - `/Candidate`
