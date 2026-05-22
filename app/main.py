@@ -255,10 +255,7 @@ def patch_candidate(candidate_id: str, payload: dict[str, Any], store: JsonStore
     candidate = store.get_entity(Candidate, candidate_id)
     if not candidate:
         raise HTTPException(status_code=404, detail="Candidate not found")
-    process = next(
-        (item for item in store.list_entities(OnboardingProcess) if item.candidate_id == candidate_id),
-        None,
-    )
+    process = store.get_process_by_candidate(candidate_id)
 
     if "status" in payload:
         candidate.status = payload["status"]

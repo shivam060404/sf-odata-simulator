@@ -51,6 +51,7 @@ class JsonStore:
         self._activities: dict[str, OnboardingActivity] = {}
         self._documents: dict[str, Document] = {}
         self._event_logs: list[EventLog] = []
+        self._process_by_candidate: dict[str, str] = {}
         self._next_event_id = 1
         if self._path:
             self._load()
@@ -72,7 +73,7 @@ class JsonStore:
                     version=item.get("version", 1),
                 )
             for item in payload.get("processes", []):
-                self._processes[item["id"]] = OnboardingProcess(
+                process = OnboardingProcess(
                     id=item["id"],
                     candidate_id=item["candidate_id"],
                     current_stage=item["current_stage"],
@@ -80,6 +81,8 @@ class JsonStore:
                     last_modified_at=_parse_datetime(item.get("last_modified_at")) or utcnow(),
                     version=item.get("version", 1),
                 )
+                self._processes[item["id"]] = process
+                self._process_by_candidate[process.candidate_id] = process.id
             for item in payload.get("tasks", []):
                 self._tasks[item["id"]] = OnboardingTask(
                     id=item["id"],
@@ -120,7 +123,8 @@ class JsonStore:
                 )
                 for item in payload.get("event_logs", [])
             ]
-            self._next_event_id = max(payload.get("next_event_id", 1), len(self._event_logs) + 1)
+            max_event_id = max((event.id for event in self._event_logs), default=0)
+            self._next_event_id = max(payload.get("next_event_id", 1), max_event_id + 1)
 
     def _serialize(self) -> dict[str, Any]:
         return {
@@ -220,6 +224,15 @@ class JsonStore:
     def add_entity(self, entity: Any) -> None:
         with self._lock:
             self._collections()[type(entity)][entity.id] = entity
+            if isinstance(entity, OnboardingProcess):
+                self._process_by_candidate[entity.candidate_id] = entity.id
+
+    def get_process_by_candidate(self, candidate_id: str) -> OnboardingProcess | None:
+        with self._lock:
+            process_id = self._process_by_candidate.get(candidate_id)
+            if not process_id:
+                return None
+            return self._processes.get(process_id)
 
     def add_event(
         self, entity_name: str, entity_id: str, action: str, payload: dict | None = None, message: str | None = None
