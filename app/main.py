@@ -4,11 +4,9 @@ from datetime import date
 from typing import Any
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
-from sqlalchemy import func, select
-from sqlalchemy.orm import Session
 
-from app.database import get_db, utcnow
-from app.models import Candidate, Document, EventLog, OnboardingActivity, OnboardingProcess, OnboardingTask
+from app.database import JsonStore, get_store
+from app.models import Candidate, Document, OnboardingActivity, OnboardingProcess, OnboardingTask, utcnow
 from app.odata import apply_filter, parse_iso8601, parse_orderby, to_collection_response, to_single_response
 from app.security import require_admin_token
 from app.state_machine import TASK_STATUSES, next_stage, validate_stage_transition
@@ -82,30 +80,30 @@ SERIALIZERS = {
 }
 
 FILTER_FIELDS = {
-    Candidate: {"candidateId": Candidate.id, "status": Candidate.status, "lastModifiedAt": Candidate.last_modified_at},
+    Candidate: {"candidateId": "id", "status": "status", "lastModifiedAt": "last_modified_at"},
     OnboardingProcess: {
-        "processId": OnboardingProcess.id,
-        "candidateId": OnboardingProcess.candidate_id,
-        "currentStage": OnboardingProcess.current_stage,
-        "lastModifiedAt": OnboardingProcess.last_modified_at,
+        "processId": "id",
+        "candidateId": "candidate_id",
+        "currentStage": "current_stage",
+        "lastModifiedAt": "last_modified_at",
     },
     OnboardingTask: {
-        "taskId": OnboardingTask.id,
-        "processId": OnboardingTask.process_id,
-        "status": OnboardingTask.status,
-        "lastModifiedAt": OnboardingTask.last_modified_at,
+        "taskId": "id",
+        "processId": "process_id",
+        "status": "status",
+        "lastModifiedAt": "last_modified_at",
     },
     OnboardingActivity: {
-        "activityId": OnboardingActivity.id,
-        "processId": OnboardingActivity.process_id,
-        "status": OnboardingActivity.status,
-        "lastModifiedAt": OnboardingActivity.last_modified_at,
+        "activityId": "id",
+        "processId": "process_id",
+        "status": "status",
+        "lastModifiedAt": "last_modified_at",
     },
     Document: {
-        "documentId": Document.id,
-        "candidateId": Document.candidate_id,
-        "status": Document.status,
-        "lastModifiedAt": Document.last_modified_at,
+        "documentId": "id",
+        "candidateId": "candidate_id",
+        "status": "status",
+        "lastModifiedAt": "last_modified_at",
     },
 }
 
@@ -118,26 +116,31 @@ ENTITY_MAP = {
 }
 
 
-def add_event(db: Session, entity_name: str, entity_id: str, action: str, payload: dict | None = None) -> None:
-    db.add(EventLog(entity_name=entity_name, entity_id=entity_id, action=action, payload=payload))
+def add_event(store: JsonStore, entity_name: str, entity_id: str, action: str, payload: dict | None = None) -> None:
+    store.add_event(entity_name=entity_name, entity_id=entity_id, action=action, payload=payload)
 
 
 def _list_model(
     model,
     request: Request,
-    db: Session,
+    store: JsonStore,
     top: int,
     skip: int,
     orderby: str | None,
     filter_expr: str | None,
 ):
     direction = parse_orderby(orderby)
-    query = apply_filter(select(model), filter_expr, FILTER_FIELDS[model])
-    count_query = select(func.count()).select_from(query.subquery())
-    total = db.execute(count_query).scalar_one()
-
-    order_col = model.last_modified_at.asc() if direction == "asc" else model.last_modified_at.desc()
-    rows = db.execute(query.order_by(order_col, model.version.asc(), model.id.asc()).offset(skip).limit(top)).scalars().all()
+    rows = apply_filter(store.list_entities(model), filter_expr, FILTER_FIELDS[model])
+    total = len(rows)
+    rows = sorted(
+        rows,
+        key=lambda row: (
+            row.last_modified_at.timestamp() * (-1 if direction == "desc" else 1),
+            row.version,
+            row.id,
+        ),
+    )
+    rows = rows[skip : skip + top]
     next_url = str(request.url.include_query_params(**{"$skip": skip + top, "$top": top})) if skip + top < total else None
     return to_collection_response([SERIALIZERS[model](row) for row in rows], total, next_url)
 
@@ -150,109 +153,109 @@ def health() -> dict[str, str]:
 @app.get("/odata/v2/Candidate")
 def list_candidates(
     request: Request,
-    db: Session = Depends(get_db),
+    store: JsonStore = Depends(get_store),
     top: int = Query(50, alias="$top", ge=1, le=500),
     skip: int = Query(0, alias="$skip", ge=0),
     orderby: str | None = Query(None, alias="$orderby"),
     filter_expr: str | None = Query(None, alias="$filter"),
 ):
-    return _list_model(Candidate, request, db, top, skip, orderby, filter_expr)
+    return _list_model(Candidate, request, store, top, skip, orderby, filter_expr)
 
 
 @app.get("/odata/v2/OnboardingProcess")
 def list_processes(
     request: Request,
-    db: Session = Depends(get_db),
+    store: JsonStore = Depends(get_store),
     top: int = Query(50, alias="$top", ge=1, le=500),
     skip: int = Query(0, alias="$skip", ge=0),
     orderby: str | None = Query(None, alias="$orderby"),
     filter_expr: str | None = Query(None, alias="$filter"),
 ):
-    return _list_model(OnboardingProcess, request, db, top, skip, orderby, filter_expr)
+    return _list_model(OnboardingProcess, request, store, top, skip, orderby, filter_expr)
 
 
 @app.get("/odata/v2/OnboardingTask")
 def list_tasks(
     request: Request,
-    db: Session = Depends(get_db),
+    store: JsonStore = Depends(get_store),
     top: int = Query(50, alias="$top", ge=1, le=500),
     skip: int = Query(0, alias="$skip", ge=0),
     orderby: str | None = Query(None, alias="$orderby"),
     filter_expr: str | None = Query(None, alias="$filter"),
 ):
-    return _list_model(OnboardingTask, request, db, top, skip, orderby, filter_expr)
+    return _list_model(OnboardingTask, request, store, top, skip, orderby, filter_expr)
 
 
 @app.get("/odata/v2/OnboardingActivity")
 def list_activities(
     request: Request,
-    db: Session = Depends(get_db),
+    store: JsonStore = Depends(get_store),
     top: int = Query(50, alias="$top", ge=1, le=500),
     skip: int = Query(0, alias="$skip", ge=0),
     orderby: str | None = Query(None, alias="$orderby"),
     filter_expr: str | None = Query(None, alias="$filter"),
 ):
-    return _list_model(OnboardingActivity, request, db, top, skip, orderby, filter_expr)
+    return _list_model(OnboardingActivity, request, store, top, skip, orderby, filter_expr)
 
 
 @app.get("/odata/v2/Document")
 def list_documents(
     request: Request,
-    db: Session = Depends(get_db),
+    store: JsonStore = Depends(get_store),
     top: int = Query(50, alias="$top", ge=1, le=500),
     skip: int = Query(0, alias="$skip", ge=0),
     orderby: str | None = Query(None, alias="$orderby"),
     filter_expr: str | None = Query(None, alias="$filter"),
 ):
-    return _list_model(Document, request, db, top, skip, orderby, filter_expr)
+    return _list_model(Document, request, store, top, skip, orderby, filter_expr)
 
 
 @app.get("/odata/v2/Candidate('{candidate_id}')")
-def get_candidate(candidate_id: str, db: Session = Depends(get_db)):
-    candidate = db.get(Candidate, candidate_id)
+def get_candidate(candidate_id: str, store: JsonStore = Depends(get_store)):
+    candidate = store.get_entity(Candidate, candidate_id)
     if not candidate:
         raise HTTPException(status_code=404, detail="Candidate not found")
     return to_single_response(candidate_dict(candidate))
 
 
 @app.get("/odata/v2/OnboardingProcess('{process_id}')")
-def get_process(process_id: str, db: Session = Depends(get_db)):
-    process = db.get(OnboardingProcess, process_id)
+def get_process(process_id: str, store: JsonStore = Depends(get_store)):
+    process = store.get_entity(OnboardingProcess, process_id)
     if not process:
         raise HTTPException(status_code=404, detail="OnboardingProcess not found")
     return to_single_response(process_dict(process))
 
 
 @app.get("/odata/v2/OnboardingTask('{task_id}')")
-def get_task(task_id: str, db: Session = Depends(get_db)):
-    task = db.get(OnboardingTask, task_id)
+def get_task(task_id: str, store: JsonStore = Depends(get_store)):
+    task = store.get_entity(OnboardingTask, task_id)
     if not task:
         raise HTTPException(status_code=404, detail="OnboardingTask not found")
     return to_single_response(task_dict(task))
 
 
 @app.get("/odata/v2/OnboardingActivity('{activity_id}')")
-def get_activity(activity_id: str, db: Session = Depends(get_db)):
-    activity = db.get(OnboardingActivity, activity_id)
+def get_activity(activity_id: str, store: JsonStore = Depends(get_store)):
+    activity = store.get_entity(OnboardingActivity, activity_id)
     if not activity:
         raise HTTPException(status_code=404, detail="OnboardingActivity not found")
     return to_single_response(activity_dict(activity))
 
 
 @app.get("/odata/v2/Document('{document_id}')")
-def get_document(document_id: str, db: Session = Depends(get_db)):
-    document = db.get(Document, document_id)
+def get_document(document_id: str, store: JsonStore = Depends(get_store)):
+    document = store.get_entity(Document, document_id)
     if not document:
         raise HTTPException(status_code=404, detail="Document not found")
     return to_single_response(document_dict(document))
 
 
 @app.patch("/odata/v2/Candidate('{candidate_id}')")
-def patch_candidate(candidate_id: str, payload: dict[str, Any], db: Session = Depends(get_db)):
-    candidate = db.get(Candidate, candidate_id)
+def patch_candidate(candidate_id: str, payload: dict[str, Any], store: JsonStore = Depends(get_store)):
+    candidate = store.get_entity(Candidate, candidate_id)
     if not candidate:
         raise HTTPException(status_code=404, detail="Candidate not found")
-    process = db.execute(select(OnboardingProcess).where(OnboardingProcess.candidate_id == candidate_id)).scalar_one_or_none()
+    process = store.get_process_by_candidate(candidate_id)
 
     if "status" in payload:
         candidate.status = payload["status"]
@@ -267,17 +270,16 @@ def patch_candidate(candidate_id: str, payload: dict[str, Any], db: Session = De
 
     candidate.last_modified_at = utcnow()
     candidate.version += 1
-    add_event(db, "Candidate", candidate.id, "PATCH", payload)
+    add_event(store, "Candidate", candidate.id, "PATCH", payload)
     if process:
-        add_event(db, "OnboardingProcess", process.id, "PATCH", {"currentStage": process.current_stage})
-    db.commit()
-    db.refresh(candidate)
+        add_event(store, "OnboardingProcess", process.id, "PATCH", {"currentStage": process.current_stage})
+    store.save()
     return to_single_response(candidate_dict(candidate))
 
 
 @app.patch("/odata/v2/OnboardingProcess('{process_id}')")
-def patch_process(process_id: str, payload: dict[str, Any], db: Session = Depends(get_db)):
-    process = db.get(OnboardingProcess, process_id)
+def patch_process(process_id: str, payload: dict[str, Any], store: JsonStore = Depends(get_store)):
+    process = store.get_entity(OnboardingProcess, process_id)
     if not process:
         raise HTTPException(status_code=404, detail="OnboardingProcess not found")
 
@@ -292,18 +294,17 @@ def patch_process(process_id: str, payload: dict[str, Any], db: Session = Depend
 
     process.last_modified_at = utcnow()
     process.version += 1
-    add_event(db, "OnboardingProcess", process.id, "PATCH", payload)
-    db.commit()
-    db.refresh(process)
+    add_event(store, "OnboardingProcess", process.id, "PATCH", payload)
+    store.save()
     return to_single_response(process_dict(process))
 
 
 @app.patch("/odata/v2/OnboardingTask('{task_id}')")
-def patch_task(task_id: str, payload: dict[str, Any], db: Session = Depends(get_db)):
-    task = db.get(OnboardingTask, task_id)
+def patch_task(task_id: str, payload: dict[str, Any], store: JsonStore = Depends(get_store)):
+    task = store.get_entity(OnboardingTask, task_id)
     if not task:
         raise HTTPException(status_code=404, detail="OnboardingTask not found")
-    process = db.get(OnboardingProcess, task.process_id)
+    process = store.get_entity(OnboardingProcess, task.process_id)
 
     if "status" in payload:
         status = payload["status"]
@@ -326,10 +327,9 @@ def patch_task(task_id: str, payload: dict[str, Any], db: Session = Depends(get_
     task.version += 1
     process.last_modified_at = utcnow()
     process.version += 1
-    add_event(db, "OnboardingTask", task.id, "PATCH", payload)
-    add_event(db, "OnboardingProcess", process.id, "PATCH", {"currentStage": process.current_stage})
-    db.commit()
-    db.refresh(task)
+    add_event(store, "OnboardingTask", task.id, "PATCH", payload)
+    add_event(store, "OnboardingProcess", process.id, "PATCH", {"currentStage": process.current_stage})
+    store.save()
     return to_single_response(task_dict(task))
 
 
@@ -339,19 +339,18 @@ def delta(
     since: str,
     sinceVersion: int = Query(0, ge=0),
     limit: int = Query(100, ge=1, le=1000),
-    db: Session = Depends(get_db),
+    store: JsonStore = Depends(get_store),
 ):
     model = ENTITY_MAP.get(entity)
     if not model:
         raise HTTPException(status_code=400, detail="Unknown entity")
     since_dt = parse_iso8601(since)
-    query = (
-        select(model)
-        .where((model.last_modified_at > since_dt) | ((model.last_modified_at == since_dt) & (model.version > sinceVersion)))
-        .order_by(model.last_modified_at.asc(), model.version.asc(), model.id.asc())
-        .limit(limit)
-    )
-    rows = db.execute(query).scalars().all()
+    rows = [
+        row
+        for row in store.list_entities(model)
+        if row.last_modified_at > since_dt or (row.last_modified_at == since_dt and row.version > sinceVersion)
+    ]
+    rows = sorted(rows, key=lambda row: (row.last_modified_at, row.version, row.id))[:limit]
     next_since = since
     next_version = sinceVersion
     if rows:
@@ -368,8 +367,8 @@ def delta(
 
 
 @app.post("/admin/seed", dependencies=[Depends(require_admin_token)])
-def admin_seed(db: Session = Depends(get_db)):
-    if db.get(Candidate, "CAND_001"):
+def admin_seed(store: JsonStore = Depends(get_store)):
+    if store.get_entity(Candidate, "CAND_001"):
         return {"seeded": False, "reason": "already seeded"}
 
     candidate = Candidate(
@@ -385,36 +384,37 @@ def admin_seed(db: Session = Depends(get_db)):
         OnboardingTask(id="TASK_002", process_id="ONB_001", task_type="DOCUMENT_VERIFICATION", status="PENDING"),
         OnboardingTask(id="TASK_003", process_id="ONB_001", task_type="DOJ_CONFIRMATION", status="PENDING"),
     ]
-    db.add(candidate)
-    db.add(process)
-    db.add_all(tasks)
-    db.add(OnboardingActivity(id="ACT_001", process_id="ONB_001", activity_type="INIT", status="OPEN"))
-    db.add(Document(id="DOC_001", candidate_id="CAND_001", doc_type="ID_PROOF", status="PENDING"))
-    db.flush()
-    add_event(db, "Candidate", candidate.id, "CREATE", candidate_dict(candidate))
-    add_event(db, "OnboardingProcess", process.id, "CREATE", process_dict(process))
-    db.commit()
+    store.add_entity(candidate)
+    store.add_entity(process)
+    for task in tasks:
+        store.add_entity(task)
+    store.add_entity(OnboardingActivity(id="ACT_001", process_id="ONB_001", activity_type="INIT", status="OPEN"))
+    store.add_entity(Document(id="DOC_001", candidate_id="CAND_001", doc_type="ID_PROOF", status="PENDING"))
+    add_event(store, "Candidate", candidate.id, "CREATE", candidate_dict(candidate))
+    add_event(store, "OnboardingProcess", process.id, "CREATE", process_dict(process))
+    store.save()
     return {"seeded": True}
 
 
 @app.post("/admin/simulate/tick", dependencies=[Depends(require_admin_token)])
-def admin_tick(db: Session = Depends(get_db)):
-    task = (
-        db.execute(select(OnboardingTask).where(OnboardingTask.status != "COMPLETED").order_by(OnboardingTask.id.asc()).limit(1))
-        .scalar_one_or_none()
+def admin_tick(store: JsonStore = Depends(get_store)):
+    task = min(
+        (item for item in store.list_entities(OnboardingTask) if item.status != "COMPLETED"),
+        key=lambda item: item.id,
+        default=None,
     )
     if not task:
         return {"advanced": False, "reason": "no pending tasks"}
     task.status = "COMPLETED"
     task.last_modified_at = utcnow()
     task.version += 1
-    process = db.get(OnboardingProcess, task.process_id)
+    process = store.get_entity(OnboardingProcess, task.process_id)
     nxt = next_stage(process.current_stage)
     if nxt:
         process.current_stage = nxt
         process.last_modified_at = utcnow()
         process.version += 1
-    add_event(db, "OnboardingTask", task.id, "SIM_TICK", {"status": "COMPLETED"})
-    add_event(db, "OnboardingProcess", process.id, "SIM_TICK", {"currentStage": process.current_stage})
-    db.commit()
+    add_event(store, "OnboardingTask", task.id, "SIM_TICK", {"status": "COMPLETED"})
+    add_event(store, "OnboardingProcess", process.id, "SIM_TICK", {"currentStage": process.current_stage})
+    store.save()
     return {"advanced": True, "taskId": task.id, "processId": process.id, "currentStage": process.current_stage}
